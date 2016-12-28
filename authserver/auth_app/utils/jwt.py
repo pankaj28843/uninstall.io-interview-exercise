@@ -25,6 +25,7 @@ def jwt_payload_handler(user):
         'email': user.email,
         'username': username,
         'organizations': user.get_organizations(),
+        'permissions': PermissionSerializer(user.get_permissions(), many=True).data,
         'exp': datetime.utcnow() + api_settings.JWT_EXPIRATION_DELTA
     }
 
