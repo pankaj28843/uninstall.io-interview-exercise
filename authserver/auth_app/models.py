@@ -1,5 +1,7 @@
 from __future__ import unicode_literals
 
+import collections
+
 from django.core.mail import send_mail
 from django.db import models
 from django.utils import timezone
@@ -29,7 +31,7 @@ class Organization(models.Model):
     created_at = AutoCreatedField(_('created at'))
     updated_at = AutoLastModifiedField(_('updated at'))
     name = models.CharField(_('name'), max_length=255, unique=True)
-    parent = models.ForeignKey('Organization', null=True)
+    parent = models.ForeignKey('Organization', null=True, related_name='children')
     is_active = models.BooleanField(_('is active'), default=True)
 
     class Meta:
@@ -127,6 +129,54 @@ class User(AbstractBaseUser):
 
         return False
 
+    def get_permissions(self):
+        roles_ids = RoleUserOrgAssociation.objects.filter(
+            user=self,
+        ).values_list('role_id', flat=True)
+
+        permissions_ids = RolePermissionAssociation.objects.filter(
+            role_id__in=roles_ids,
+        ).values_list('permission_id', flat=True)
+
+        permissions = Permission.objects.filter(id__in=permissions_ids).all()
+
+        return permissions
+
+    def get_organizations(self):
+        from .serializers import (
+            OrganizationSerializer,
+            RoleSerializer,
+        )
+
+        associated_roles = RoleUserOrgAssociation.objects.filter(
+            user=self,
+        ).select_related(
+            'role',
+            'organization',
+        ).prefetch_related(
+            'role__permissions',
+        ).all()
+
+        organizations_dict = collections.defaultdict(dict)
+        for associated_role in associated_roles:
+            organization = associated_role.organization
+            role = associated_role.role
+
+            organizations_dict[organization.id]['obj'] = organization
+            try:
+                roles = organizations_dict[organization.id]['roles']
+            except KeyError:
+                roles = organizations_dict[organization.id]['roles'] = []
+
+            roles.append(RoleSerializer(role).data)
+
+        organizations = []
+        for _org_dict in organizations_dict.values():
+            _org_data = OrganizationSerializer(_org_dict['obj']).data
+            _org_data['roles'] = _org_dict['roles']
+            organizations.append(_org_data)
+
+        return organizations
 
 
 class Role(models.Model):
@@ -135,6 +185,7 @@ class Role(models.Model):
     updated_at = AutoLastModifiedField(_('updated at'))
     name = models.CharField(_('name'), max_length=255)
     description = models.CharField(_('description'), max_length=255)
+    permissions = models.ManyToManyField('Permission', through='RolePermissionAssociation')
 
     class Meta:
         db_table = 'roles'
@@ -163,6 +214,7 @@ class Permission(models.Model):
     updated_at = AutoLastModifiedField(_('updated at'))
     name = models.CharField(_('name'), max_length=255, unique=True)
     description = models.CharField(_('description'), max_length=255)
+    roles = models.ManyToManyField(Role, through='RolePermissionAssociation')
 
     class Meta:
         db_table = 'permissions'
